@@ -1,20 +1,49 @@
 from fastapi.testclient import TestClient
+import pytest
 from main import app
 
-client = TestClient(app)
 
-def test_returns_24_predictions():
-    payload = {"series": [3.2] * 48}
+@pytest.fixture
+def client():
+    return TestClient(app)
+
+
+def _series(n=48):
+    return [3.0 + 0.01 * (i % 24) + 0.001 * i for i in range(n)]
+
+
+def test_forecast(client):
+    payload = {"series": _series(48)} # checks if 48 data points return 24 data points
     r = client.post("/forecast", json=payload)
+
     assert r.status_code == 200
     data = r.json()
     assert "prediction" in data
-    assert isinstance(data["prediction"], list)
-    assert len(data["prediction"]) == 24
 
-def test_invalid_payload_returns_error():
-    # strings force validation/model failure
-    payload = {"series": ["not-a-number"] * 48}
+    pred = data["prediction"]
+    assert isinstance(pred, list)
+    assert len(pred) == 24
+    assert all(isinstance(x, (int, float)) for x in pred)
+
+
+def test_short_series_400(client):
+    payload = {"series": _series(10)}  # too short for 24 points
     r = client.post("/forecast", json=payload)
-    # Pydantic may catch it (422) or your try/except might return 400
-    assert r.status_code in (400, 422)
+
+    assert r.status_code == 400
+    # Helpful error message makes debugging easier
+    assert "48" in r.json().get("detail", "")
+
+
+@pytest.mark.parametrize(
+    "bad_payload",
+    [
+        {"series": ["not-a-number"] * 48},  # wrong element type
+        {"series": "not-a-list"},           # wrong shape
+        {},                                 # missing required field
+    ],
+)
+def test_schema_validation_422_for_bad_json(client, bad_payload):
+    r = client.post("/forecast", json=bad_payload)
+    assert r.status_code == 422
+
